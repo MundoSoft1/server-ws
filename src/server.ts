@@ -1,26 +1,37 @@
 import WebSocket from 'ws';
+import jwt from 'jsonwebtoken';
 
-const wss = new WebSocket.Server({ port: 8080 });
+const secretKey = 'token';
+const server = new WebSocket.Server({ port: 8080 });
 
-wss.on('listening', () => {
-    console.log('Servidor WebSocket iniciado correctamente en el puerto 8080');
+server.on('connection', (ws: WebSocket, req: any) => {
+  const token = req.headers['authorization'];
+
+  if (!token) {
+    ws.close();
+    return;
+  }
+
+  const tokenWithoutBearer = token.replace('Bearer ', '');
+  jwt.verify(tokenWithoutBearer, secretKey, (err: any) => {
+    if (err) {
+      ws.close();
+      return;
+    }
+    
+    console.log('Conexión WebSocket autenticada');
+
+    const stream = ws as unknown as NodeJS.ReadableStream;
+
+    stream.on('data', (data: Buffer) => {
+      console.log(`Datos recibidos del cliente: ${data.toString()}`);
+      // Procesar los datos del cliente
+    });
+  });
+
+  ws.on('close', () => {
+    console.log('Conexión WebSocket cerrada');
+  });
 });
 
-wss.on('connection', (ws: WebSocket) => {
-    console.log('Cliente conectado');
-
-    ws.on('message', (data: Buffer) => {
-        console.log('Datos binarios recibidos');
-
-        // Ejemplo: Guardar los datos binarios en un archivo
-        const fs = require('fs');
-        fs.writeFileSync('videoFrame.bin', data);
-
-        // Respuesta al cliente WebSocket
-        ws.send('Datos binarios recibidos por el servidor');
-    });
-
-    ws.on('close', () => {
-        console.log('Cliente desconectado');
-    });
-});
+console.log('Servidor WebSocket escuchando en el puerto 8080');
