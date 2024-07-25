@@ -6,7 +6,7 @@ const { Readable } = require('stream');
 const RABBITMQ_URL = 'amqp://44.223.219.154';
 const IP_QUEUE_NAME = 'ip.camera';
 const ALERT_QUEUE_NAME = 'alerta';  
-const API_URL = 'http://localhost:3000/images';
+const API_URL = 'http://54.173.247.52/images';
 
 let cameraIP = null;  // Guardar solo la última IP de la cámara
 
