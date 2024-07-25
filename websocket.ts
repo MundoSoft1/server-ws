@@ -2,7 +2,8 @@ import * as WebSocket from 'ws';
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
-import { consumeMessages } from './src/index';
+import { consumeMessages } from './src/index.js';
+
 
 const PORT = 8080;
 
