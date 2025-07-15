@@ -2,12 +2,21 @@ import * as WebSocket from 'ws';
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
-import { consumeStream, getSystemStats, stopStreamConsumption } from './src/index.js';
 
-const PORT = 8080;
+// Configuración de puerto desde variables de entorno con valores por defecto
+const initialPort = parseInt(process.env.PORT || '8080', 10);
+const maxPort = parseInt(process.env.PORT_RANGE_END || (initialPort + 50).toString(), 10);
 const STREAM_URL = process.env.STREAM_URL || 'ws://your-stream-source.com/stream';
 
-// Interfaces para TypeScript
+// --- Interfaces para TypeScript ---
+
+// Interfaz para estadísticas del servidor local
+interface SystemStats {
+  uptime: number;
+  memoryUsage: NodeJS.MemoryUsage;
+  server: ConnectionStats;
+}
+
 interface StreamMessage {
   type: string;
   data?: any;
@@ -39,6 +48,36 @@ interface ConnectionStats {
   messagesReceived: number;
   startTime: number;
 }
+
+// --- FUNCIONES SIMULADAS/LOCALES (para que el archivo sea autónomo) ---
+
+/**
+ * Obtiene las estadísticas del sistema para este servidor.
+ */
+function getSystemStats(): SystemStats {
+  return {
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    server: connectionStats, // Incluimos las estadísticas de conexión aquí.
+  };
+}
+
+/**
+ * Simula el inicio del consumo de un stream externo.
+ */
+async function consumeStream(streamUrl: string) {
+  console.log(`(Simulado) Iniciando consumo de stream desde: ${streamUrl}`);
+  // En una implementación real, aquí iría la lógica de conexión al stream.
+  return { status: 'simulated_active', streamUrl };
+}
+
+/**
+ * Simula la detención del consumo del stream.
+ */
+function stopStreamConsumption() {
+  console.log('(Simulado) Deteniendo el consumo de stream.');
+}
+
 
 const app = express();
 app.use(cors());
@@ -72,12 +111,10 @@ function broadcast(data: StreamMessage | string, filter?: (client: ClientConnect
 
   let sentCount = 0;
   
-  // Convertir wss.clients a array para poder usar filter
   const clients = Array.from(wss.clients) as ClientConnection[];
   
   clients.forEach((client: ClientConnection) => {
     if (client.readyState === WebSocket.OPEN) {
-      // Aplicar filtro si existe
       if (filter && !filter(client)) {
         return;
       }
@@ -106,8 +143,6 @@ function removeClient(client: ClientConnection) {
 
 // Función para autenticar cliente (básica)
 function authenticateClient(client: ClientConnection, token?: string): boolean {
-  // Implementar lógica de autenticación aquí
-  // Por ahora, acepta todos los clientes
   client.authenticated = true;
   return true;
 }
@@ -167,13 +202,11 @@ function handleClientMessage(client: ClientConnection, message: any) {
         
       case 'request_stats':
         if (client.authenticated) {
+          // CORREGIDO: Llamamos a nuestra función local. No se necesita conversión de tipo.
           const stats = getSystemStats();
           const statsResponse: StreamMessage = {
             type: 'stats_response',
-            data: {
-              ...stats,
-              server: connectionStats
-            }
+            data: stats // El objeto ya tiene la estructura correcta.
           };
           client.send(JSON.stringify(statsResponse));
         }
@@ -202,7 +235,6 @@ wss.on('connection', (ws: WebSocket, req) => {
   
   console.log(`Cliente conectado: ${clientId} desde ${req.socket.remoteAddress}`);
   
-  // Enviar mensaje de bienvenida
   const welcomeMessage: StreamMessage = {
     type: 'welcome',
     clientId,
@@ -211,7 +243,6 @@ wss.on('connection', (ws: WebSocket, req) => {
   };
   client.send(JSON.stringify(welcomeMessage));
   
-  // Notificar a otros clientes (opcional)
   const connectedMessage: StreamMessage = {
     type: 'client_connected',
     clientId,
@@ -219,20 +250,16 @@ wss.on('connection', (ws: WebSocket, req) => {
   };
   broadcast(connectedMessage, (c) => c !== client && !!c.authenticated);
 
-  
-  // Manejo de mensajes
   client.on('message', (message: string) => {
     console.log(`Mensaje recibido de ${clientId}:`, message);
     connectionStats.messagesReceived++;
     handleClientMessage(client, message);
   });
   
-  // Manejo de cierre de conexión
   client.on('close', () => {
     console.log(`Cliente desconectado: ${clientId}`);
     removeClient(client);
     
-    // Notificar a otros clientes
     const disconnectedMessage: StreamMessage = {
       type: 'client_disconnected',
       clientId,
@@ -241,13 +268,11 @@ wss.on('connection', (ws: WebSocket, req) => {
     broadcast(disconnectedMessage, (c) => !!c.authenticated);
   });
   
-  // Manejo de errores
   client.on('error', (error) => {
     console.error(`Error en cliente ${clientId}:`, error);
     removeClient(client);
   });
   
-  // Implementar ping/pong
   const pingInterval = setInterval(() => {
     if (client.readyState === WebSocket.OPEN) {
       client.ping();
@@ -263,25 +288,27 @@ wss.on('connection', (ws: WebSocket, req) => {
 
 // Rutas REST para monitoreo
 app.get('/health', (req, res) => {
+  const finalPort = (server.address() as WebSocket.AddressInfo)?.port || 'N/A';
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    connections: connectionStats.activeConnections
+    connections: connectionStats.activeConnections,
+    listeningOnPort: finalPort,
   });
 });
 
 app.get('/stats', (req, res) => {
+  // CORREGIDO: Llamamos a nuestra función local.
   const systemStats = getSystemStats();
   res.json({
-    server: connectionStats,
-    stream: systemStats,
+    ...systemStats,
     timestamp: new Date().toISOString()
   });
 });
 
 app.post('/broadcast', (req, res) => {
-  const { message, filter } = req.body;
+  const { message } = req.body;
   
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
@@ -309,7 +336,7 @@ app.post('/broadcast', (req, res) => {
 // Función para limpiar conexiones inactivas
 function cleanupInactiveConnections() {
   const now = Date.now();
-  const timeout = 60000; // 1 minuto
+  const timeout = 60000;
   
   connectedClients.forEach((client, clientId) => {
     if (client.lastPing && now - client.lastPing > timeout) {
@@ -320,7 +347,6 @@ function cleanupInactiveConnections() {
   });
 }
 
-// Ejecutar limpieza cada 5 minutos
 setInterval(cleanupInactiveConnections, 5 * 60 * 1000);
 
 // Iniciar el sistema de streaming
@@ -328,11 +354,11 @@ async function initializeStreaming() {
   try {
     console.log('Iniciando sistema de streaming...');
     
+    // Llamamos a nuestra función local simulada
     const result = await consumeStream(STREAM_URL);
     
     console.log('Sistema de streaming iniciado:', result);
     
-    // Notificar a todos los clientes que el streaming está activo
     const streamingStartedMessage: StreamMessage = {
       type: 'streaming_started',
       status: 'active',
@@ -343,7 +369,6 @@ async function initializeStreaming() {
   } catch (error) {
     console.error('Error iniciando el sistema de streaming:', error);
     
-    // Notificar error a los clientes
     const errorMessage: StreamMessage = {
       type: 'streaming_error',
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -356,17 +381,14 @@ async function initializeStreaming() {
 process.on('SIGINT', () => {
   console.log('Cerrando servidor...');
   
-  // Notificar a todos los clientes
   const shutdownMessage: StreamMessage = {
     type: 'server_shutdown',
     message: 'Servidor cerrándose'
   };
   broadcast(shutdownMessage);
   
-  // Detener el consumo de streams
   stopStreamConsumption();
   
-  // Cerrar servidor
   server.close(() => {
     console.log('Servidor cerrado');
     process.exit(0);
@@ -379,15 +401,39 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// Iniciar servidor
-server.listen(PORT, () => {
-  console.log(`Servidor HTTP y WebSocket escuchando en el puerto ${PORT}`);
-  console.log(`Estadísticas disponibles en http://localhost:${PORT}/stats`);
-  console.log(`Health check en http://localhost:${PORT}/health`);
-  
-  // Inicializar el sistema de streaming
-  initializeStreaming();
-});
+// Función para iniciar el servidor con fallback de puerto
+function startServer(port: number) {
+  if (port > maxPort) {
+    console.error(`Error: No se pudo encontrar un puerto disponible en el rango ${initialPort}-${maxPort}.`);
+    process.exit(1);
+  }
 
-// Exportar funciones para uso externo
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      console.log(`El puerto ${port} está ocupado. Intentando con el puerto ${port + 1}...`);
+      server.close(() => {
+        startServer(port + 1);
+      });
+    } else {
+      console.error('Error al iniciar el servidor:', error);
+      process.exit(1);
+    }
+  });
+  
+  server.removeAllListeners('listening');
+
+  server.listen(port, () => {
+    const finalPort = (server.address() as WebSocket.AddressInfo).port;
+    console.log(`✅ Servidor HTTP y WebSocket escuchando en el puerto ${finalPort}`);
+    console.log(`   Estadísticas: http://localhost:${finalPort}/stats`);
+    console.log(`   Health check: http://localhost:${finalPort}/health`);
+    
+    initializeStreaming();
+  });
+}
+
+// Iniciar el proceso del servidor.
+startServer(initialPort);
+
+// Exportar funciones para uso externo (si otros módulos TS lo necesitan)
 export { broadcast, connectionStats, connectedClients };
